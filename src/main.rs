@@ -1,6 +1,6 @@
-use std::io;
+use std::{io, path::PathBuf};
 
-use eframe::egui;
+use eframe::egui::{self, Align, Layout};
 
 use crate::{editor::Editor, fs_manager::{File, Manager}};
 
@@ -65,7 +65,7 @@ impl Default for MyApp {
 impl MyApp {
     fn render_files_recursively(&mut self, ui: &mut egui::Ui, files: Vec<File>) {
         for file in files {
-            if file.is_dir() && file.name().is_some() && file.children().len() > 0 {
+            if file.is_dir() && file.name().is_some() {
                 ui.collapsing(file.name().unwrap(), |collapsing_ui| {
                     self.render_files_recursively(collapsing_ui, file.children());
                 });
@@ -92,72 +92,136 @@ impl MyApp {
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
-                    ui.menu_button("File", |ui| {
-                        if ui.button("Open File").clicked() { 
-                            if let Some(path) = rfd::FileDialog::new().pick_file() {
-                                println!("{:#?}", path);
-                                self.set_current_path(path.to_str().unwrap().to_string()).unwrap();
-                            }
-                            self.opening_file = false;
-                            ctx.request_repaint();
-                        }
-                        if ui.button("Open Folder").clicked() { 
-                            if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                                println!("{}", path.to_str().unwrap().to_string());
-                                self.set_current_path(path.to_str().unwrap().to_string()).unwrap();
-                            }
-                            self.opening_file = false;
-                        }
-                        if ui.button("Save").clicked() { 
-                            self.editor.save_current_instance().unwrap();
-                        }
-                        if ui.button("Quit").clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                    });
+            egui::TopBottomPanel::top("menu_bar").exact_height(35.).frame(egui::Frame::new().inner_margin(0)).exact_height(35.).show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(4, 9, 26))
+                    .show(ui, |ui| {
+                        ui.set_height(ui.available_height());
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add_space(8.);
+                            egui::menu::bar(ui, |ui| {
+                                ui.set_height(ui.available_height());
+                                ui.menu_button("File", |ui| {
+                                    if ui.button("Open File").clicked() { 
+                                        if let Some(path) = rfd::FileDialog::new().pick_file() {
+                                            println!("{:#?}", path);
+                                            self.set_current_path(path.to_str().unwrap().to_string()).unwrap();
+                                        }
+                                        self.opening_file = false;
+                                        ctx.request_repaint();
+                                    }
+                                    if ui.button("Open Folder").clicked() { 
+                                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                                            println!("{}", path.to_str().unwrap().to_string());
+                                            self.set_current_path(path.to_str().unwrap().to_string()).unwrap();
+                                        }
+                                        self.opening_file = false;
+                                    }
+                                    if ui.button("Save").clicked() { 
+                                        match self.editor.save_current_instance() {
+                                            Ok(_) => {},
+                                            Err(_) => {
+                                                if let Some(path) = rfd::FileDialog::new().pick_file() {
+                                                    println!("Choosing path to create new file: {}", path.to_str().unwrap().to_string());
+                                                    self.set_current_path(path.to_str().unwrap().to_string()).unwrap();
+                                                    self.editor.new_instance(path.to_str().unwrap().to_string()).unwrap();
+                                                }
+                                            }
+                                        }
+                                        }
+                                    if ui.button("Quit").clicked() {
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    }
+                                });
 
-                    ui.menu_button("Mode", |ui| {
-                        if ui.radio_value(&mut self.current_mode, AppMode::View, "View").clicked() { ui.close(); }
-                        if ui.radio_value(&mut self.current_mode, AppMode::Edit, "Edit").clicked() { ui.close(); }
-                        if ui.radio_value(&mut self.current_mode, AppMode::Settings, "Settings").clicked() { ui.close(); }
-                    })
-                })
+                                ui.menu_button("Mode", |ui| {
+                                    if ui.radio_value(&mut self.current_mode, AppMode::View, "View").clicked() { ui.close(); }
+                                    if ui.radio_value(&mut self.current_mode, AppMode::Edit, "Edit").clicked() { ui.close(); }
+                                    if ui.radio_value(&mut self.current_mode, AppMode::Settings, "Settings").clicked() { ui.close(); }
+                                })
+                            });
+                        });
+                    });
             });
 
             egui::SidePanel::left("info_panel")
                 .default_width(250.)
                 .min_width(200.)
                 .max_width(400.)
+                .frame(egui::Frame::new().inner_margin(0.0))
                 .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-                        ui.set_max_width(ui.available_width()); 
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgb(5, 10, 28))
+                        .inner_margin(10.)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("Files Explorer").size(16.));
+                            ui.separator();
+                            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                                ui.set_max_width(ui.available_width()); 
 
-                        if self.manager.files().len() > 0 {
-                            self.render_files_recursively(ui, self.manager.files());
-                        } else {
-                            ui.heading("Choose file/folder first");
-                        }
+                                if self.manager.files().len() > 0 {
+                                    let parent_name = self.manager.path().unwrap().file_name().unwrap().to_str().unwrap().to_string();
+                                    ui.collapsing(parent_name, |ui| {
+                                        self.render_files_recursively(ui, self.manager.files());
+                                    });
+                                } else {
+                                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                        ui.heading("Empty");
+                                    });
+                                }
+                            });
+                        });
+                });
+
+            egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(0)).show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(4, 9, 26))
+                    .inner_margin(10.)
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.set_min_height(24.);
+                        ui.horizontal(|ui| {
+                            for (name, path, saved) in self.editor.instances_data().unwrap() {
+                                let response = egui::Frame::new()
+                                    .inner_margin(4.)
+                                    .corner_radius(4.)
+                                    .show(ui, |ui| {
+                                        ui.style_mut().interaction.selectable_labels = false;
+                                        ui.set_width(20.);
+                                        ui.horizontal(|ui| {
+                                            if !saved {
+                                                let (rect, _) = ui.allocate_exact_size(egui::vec2(10., 10.), egui::Sense::hover());
+                                                ui.painter().circle_filled(
+                                                    rect.center(), 2., egui::Color32::WHITE);
+                                            }
+
+                                            ui.label(name);
+                                        });
+                                    }).response.interact(egui::Sense::click());
+
+                                if response.clicked() {
+                                    self.editor.new_instance(path).unwrap();
+                                    println!("Clicked")
+                                }
+
+                                if response.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+                                ui.separator();
+                            };
+                        });
                     });
-                });
-
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    for (name, path) in self.editor.instances_data().unwrap() {
-                        let response = ui.add(egui::SelectableLabel::new(false, name));
-
-                        if response.clicked() {
-                            self.editor.new_instance(path).unwrap();
-                        }
-                    }
-                });
-                ui.separator();
+                let (rect, _) = ui.allocate_at_least(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+                ui.painter().hline(
+                    rect.left()..=rect.right(),
+                    rect.center().y,
+                    ui.visuals().widgets.noninteractive.bg_stroke // или ваш цвет
+                );
                 match self.current_mode {
                     AppMode::View => {
                         egui::Frame::new()
-                            .fill(egui::Color32::from_rgb(45, 45, 45))
-                            .corner_radius(8.)
+                            .fill(egui::Color32::from_rgb(6, 11, 31))
                             .inner_margin(10.)
                             .show(ui, |ui| {
                                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -171,7 +235,7 @@ impl eframe::App for MyApp {
                                     ); 
 
                                     if response.changed() {
-                                        self.editor.update_instance_content(self.editor.current_content.clone()).unwrap();
+                                        self.editor.update_instance_content().unwrap();
                                     }
                                 });
                             });

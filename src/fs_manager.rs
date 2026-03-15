@@ -31,6 +31,10 @@ impl Manager {
     self
   }
 
+  pub fn path(&mut self) -> Option<PathBuf> {
+    self.current_opened.clone()
+  }
+
   pub fn load(&mut self) -> Result<&Self, io::Error> {
     if !self.current.is_some() {
       return Err(io::Error::new(io::ErrorKind::InvalidData, "Current path can't be None"))
@@ -47,7 +51,7 @@ impl Manager {
   fn parse_files(&mut self, path: String) -> Result<Vec<File>, io::Error> {
     let mut files = Vec::new();
 
-    let path_buf = PathBuf::from(path.clone());
+    let mut path_buf = PathBuf::from(path.clone());
     match path_buf.is_dir() {
       true => {
         match fs::read_dir(path) {
@@ -86,7 +90,6 @@ impl Manager {
         }
       },
       false => {
-        let path_buf = PathBuf::from(path.clone());
         match fs::metadata(path.clone()) {
           Ok(meta) => {
             let name = path_buf.file_name()
@@ -95,13 +98,14 @@ impl Manager {
             let extension = path_buf.extension()
                 .and_then(|os_str| os_str.to_str())
                 .map(|s| s.to_string());
+            path_buf.pop();
             files.push(File::new(
               name,
-              meta.is_dir(),
+              false,
               extension,
               meta.created()?,
               Vec::new(),
-              path
+              path_buf.to_str().unwrap().to_string()
             ));
           },
           Err(e) => {

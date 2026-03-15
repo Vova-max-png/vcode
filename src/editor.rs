@@ -27,51 +27,65 @@ impl Editor {
     }
   }
 
+  // Function used to create new instance of editor.
+  // Firstly, check whether there is already an instance with such path
+  // to prevent creating many instances for one file
   pub fn new_instance(&mut self, path: String) -> Result<(), io::Error> {
     match self.instance_by_path(path.clone()) {
-      Ok(i) => { self.set_active_instance(i.id).unwrap(); },
-      Err(_) => {
+      Some(i) => { self.set_active_instance(i.id).unwrap(); },
+      None => {
         let mut instance = EditorInstance::new(path.clone());
         instance.parse(path.clone())?;
         self.active_instance_id = Some(instance.id());
         self.editor_instances.push(instance);
-        self.current_content = self.current_instance()?.clone().content;
+        self.current_content = self.current_instance()?.unwrap().clone().content;
       }
     };
     Ok(())
   }
 
-  fn set_active_instance(&mut self, instace_id: String) -> Result<(), io::Error> {
-    self.active_instance_id = Some(instace_id);
-    self.current_content = self.current_instance()?.clone().content;
+  // Function to manage current content and active_instance_id 
+  // by selecting already existing instance by it's id
+  fn set_active_instance(&mut self, instance_id: String) -> Result<(), io::Error> {
+    self.active_instance_id = Some(instance_id);
+    self.current_content = self.current_instance()?.unwrap().clone().content;
     Ok(())
   }
 
-  pub fn instances_data(&mut self) -> Result<Vec<(String, String)>, io::Error> {
+  // Function that returns all opened instances 
+  pub fn instances_data(&mut self) -> Result<Vec<(String, String, bool)>, io::Error> {
     let instances = self.editor_instances.clone();
     let mut data = Vec::new();
     for i in instances {
       let path = PathBuf::from(i.path.clone());
       let name = path.file_name()
         .and_then(|os_str| os_str.to_str())
-        .map(|s| s.to_string()).unwrap_or("No name".to_string());
-      data.push((name, i.path));
+        .map(|s| s.to_string()).unwrap_or("Unknown file".to_string());
+      let saved = i.saved;
+      data.push((name, i.path, saved));
     }
     Ok(data)
   }
 
-  fn instance_by_path(&self, path: String) -> Result<EditorInstance, io::Error> {
+  // Function to find instances by it's path.
+  // Used to check whether there is already instance with such path
+  // to prevent creating many instances for one file
+  fn instance_by_path(&self, path: String) -> Option<EditorInstance> {
     match self.editor_instances.iter().find(|i| i.path == path) {
-      Some(i) => return Ok(i.clone()),
-      None => return Err(io::Error::new(io::ErrorKind::NotFound, "Instance with such path was not found!"))
+      Some(i) => return Some(i.clone()),
+      None => return None
     }
   }
 
-  pub fn update_instance_content(&mut self, new_content: String) -> Result<(), io::Error> {
-    self.current_content = new_content.clone();
+  // Function used to update current instance's content
+  pub fn update_instance_content(&mut self) -> Result<(), io::Error> {
     let auto_save = self.auto_save;
-    let current_instance = self.current_instance()?;
-    current_instance.content = new_content;
+    let current_content = self.current_content.clone();
+    let current_instance = match self.current_instance()?{
+      Some(i) => i,
+      None => return Err(io::Error::new(io::ErrorKind::NotFound, "No instance selected yet!"))
+    };
+    current_instance.content = current_content;
     match auto_save {
       true => { current_instance.save()?; },
       false => { current_instance.set_unsaved(); },
@@ -79,27 +93,24 @@ impl Editor {
     Ok(())
   }
 
+  // Function that calls current instance's save function
+  // that saves it's content accordingly to it's path
   pub fn save_current_instance(&mut self) ->Result<(), io::Error> {
-    let current_instance = self.current_instance()?;
+    let current_instance = match self.current_instance()? {
+      Some(i) => i,
+      None => return Err(io::Error::new(io::ErrorKind::NotFound, "There is no active instance to be saved!"))
+    };
     current_instance.save()?;
     Ok(())
   }
 
-  fn current_instance(&mut self) -> Result<&mut EditorInstance, io::Error> {
+  // Function used to retrieve current instance from vector array by currently opened instance's id
+  fn current_instance(&mut self) -> Result<Option<&mut EditorInstance>, io::Error> {
     let instance = self.editor_instances.iter_mut().find(|i| i.id == self.active_instance_id.as_deref().unwrap());
     match instance {
-      Some(i) => Ok(i),
-      None =>  return Err(io::Error::new(io::ErrorKind::NotFound, "No current instance found!"))
+      Some(i) => Ok(Some(i)),
+      None => Ok(None)
     }
-  }
-
-  pub fn current_content(&mut self) -> Result<String, io::Error> {
-    if self.active_instance_id.is_none() {
-      return Ok(String::new())
-    }
-    let mut instances_copy = self.editor_instances.clone();
-    instances_copy.retain(|e| e.id == self.active_instance_id.as_deref().unwrap());
-    Ok(instances_copy[0].content.clone())
   }
 }
 
