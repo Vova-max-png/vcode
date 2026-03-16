@@ -1,11 +1,12 @@
-use std::{io, path::PathBuf};
+use std::{collections::btree_map::Range, fs::File, io::{self, BufWriter}, ops::{Bound, RangeBounds}, path::PathBuf};
+use ropey::{Rope, RopeSlice};
 
 use uuid::Uuid;
 
 #[derive(Clone)]
 struct EditorInstance {
   id: String,
-  content: String,
+  content: Rope,
   path: String,
   saved: bool
 }
@@ -14,7 +15,7 @@ pub struct Editor {
   pub auto_save: bool,
   editor_instances: Vec<EditorInstance>,
   active_instance_id: Option<String>,
-  pub current_content: String
+  pub current_content: Rope
 }
 
 impl Editor {
@@ -23,7 +24,7 @@ impl Editor {
       auto_save: false,
       editor_instances: Vec::new(),
       active_instance_id: None,
-      current_content: String::new()
+      current_content: Rope::new()
     }
   }
 
@@ -78,8 +79,18 @@ impl Editor {
   }
 
   // Function used to update current instance's content
-  pub fn update_instance_content(&mut self) -> Result<(), io::Error> {
+  pub fn update_instance_content<R>(&mut self, range: R, buf: String) -> Result<(), io::Error>
+  where 
+    R: RangeBounds<usize> + Clone
+    {
     let auto_save = self.auto_save;
+    self.current_content.remove(range.clone());
+    let range_start = match range.start_bound() {
+      Bound::Included(&s) => s,
+      Bound::Excluded(&s) => s + 1,
+      Bound::Unbounded => 0
+    };
+    self.current_content.insert(range_start, &buf);
     let current_content = self.current_content.clone();
     let current_instance = match self.current_instance()?{
       Some(i) => i,
@@ -119,20 +130,20 @@ impl EditorInstance {
     let instance_id = format!("{}-{}", path, Uuid::new_v4());
     Self {
       id: instance_id,
-      content: String::new(),
+      content: Rope::new(),
       path,
       saved: true
     }
   }
 
   pub fn parse(&mut self, path: String) -> Result<&Self, io::Error> {
-    println!("Parsing file: {}", path);
-    self.content = std::fs::read_to_string(path)?;
+    self.content = Rope::from_reader(std::fs::File::open(path)?)?;
     Ok(self)
   }
 
   pub fn save(&mut self) -> Result<&mut Self, io::Error> {
-    std::fs::write(self.path.clone(), self.content.clone())?;
+    println!("Writing: {}", self.content.to_string());
+    self.content.write_to(BufWriter::new(File::create(self.path.clone())?))?;
     self.saved = true;
     Ok(self)
   }

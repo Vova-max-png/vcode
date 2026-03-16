@@ -1,11 +1,12 @@
-use std::{io, path::PathBuf};
+use std::io;
 
-use eframe::egui::{self, Align, Layout};
+use eframe::egui::{self, Id};
 
 use crate::{editor::Editor, fs_manager::{File, Manager}};
 
 mod fs_manager;
 mod editor;
+mod layouter;
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
@@ -120,7 +121,8 @@ impl eframe::App for MyApp {
                                     if ui.button("Save").clicked() { 
                                         match self.editor.save_current_instance() {
                                             Ok(_) => {},
-                                            Err(_) => {
+                                            Err(e) => {
+                                                println!("Current instance: {:#?}", e);
                                                 if let Some(path) = rfd::FileDialog::new().pick_file() {
                                                     println!("Choosing path to create new file: {}", path.to_str().unwrap().to_string());
                                                     self.set_current_path(path.to_str().unwrap().to_string()).unwrap();
@@ -134,7 +136,7 @@ impl eframe::App for MyApp {
                                     }
                                 });
 
-                                ui.menu_button("Mode", |ui| {
+                                ui.menu_button("Edit", |ui| {
                                     if ui.radio_value(&mut self.current_mode, AppMode::View, "View").clicked() { ui.close(); }
                                     if ui.radio_value(&mut self.current_mode, AppMode::Edit, "Edit").clicked() { ui.close(); }
                                     if ui.radio_value(&mut self.current_mode, AppMode::Settings, "Settings").clicked() { ui.close(); }
@@ -216,7 +218,7 @@ impl eframe::App for MyApp {
                 ui.painter().hline(
                     rect.left()..=rect.right(),
                     rect.center().y,
-                    ui.visuals().widgets.noninteractive.bg_stroke // или ваш цвет
+                    ui.visuals().widgets.noninteractive.bg_stroke
                 );
                 match self.current_mode {
                     AppMode::View => {
@@ -224,19 +226,56 @@ impl eframe::App for MyApp {
                             .fill(egui::Color32::from_rgb(6, 11, 31))
                             .inner_margin(10.)
                             .show(ui, |ui| {
-                                egui::ScrollArea::vertical().show(ui, |ui| {
-                                    let response = ui.add_sized(ui.available_size_before_wrap(), egui::TextEdit::multiline(&mut self.editor.current_content)
-                                        .font(egui::TextStyle::Monospace)
-                                        .code_editor()
-                                        .desired_rows(20)
-                                        .desired_width(f32::INFINITY)
-                                        .hint_text("Start typing something...")
-                                        .frame(false)
-                                    ); 
+                                ui.allocate_ui(ui.available_size(), |ui| {
+                                    let text_style = egui::TextStyle::Monospace;
+                                    let row_height = ui.text_style_height(&text_style);
+                                    let total_rows = self.editor.current_content.len_lines();
+                                    egui::ScrollArea::vertical()
+                                        .auto_shrink([false; 2]) 
+                                        .min_scrolled_height(ui.available_height())
+                                        .id_salt("editor_scroll")
+                                        .show_rows(ui, row_height, total_rows, |ui, rows_range| {
+                                            ui.horizontal(|ui| {
+                                                ui.vertical( |ui| {
+                                                    ui.set_width(total_rows.to_string().len() as f32*8.);
+                                                    ui.set_min_width(16.);
+                                                    ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                                                        for i in rows_range.clone() {
+                                                            ui.label((i + 1).to_string());
+                                                        }
+                                                    });
+                                                });
+                                                ui.separator();
+                                                let visible_rows = rows_range.end - rows_range.start;
+                                                let start_idx = self.editor.current_content.line_to_char(rows_range.start);
+                                                let end_idx = self.editor.current_content.line_to_char(rows_range.end);
+                                                let mut buf = match self.editor.current_content.len_lines() {
+                                                    0..=1 => String::new(),
+                                                    2.. => {
+                                                        let slice = self.editor.current_content.slice(start_idx..end_idx);
+                                                        slice.to_string()
+                                                    }
+                                                };
+                                                let response = ui.add_sized(ui.available_size(), egui::TextEdit::multiline(&mut buf)
+                                                    .font(text_style)
+                                                    .code_editor()
+                                                    .lock_focus(true)
+                                                    .desired_width(f32::INFINITY)
+                                                    .desired_rows(visible_rows)
+                                                    .id(Id::new("editor input"))
+                                                    .hint_text("Start typing something...")
+                                                    .frame(false)
+                                                );
 
-                                    if response.changed() {
-                                        self.editor.update_instance_content().unwrap();
-                                    }
+                                                if response.changed() {
+                                                    self.editor.update_instance_content(start_idx..end_idx, buf).unwrap();
+                                                }
+
+                                                if response.hovered() {
+                                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                                                }
+                                            });
+                                    });
                                 });
                             });
                     },

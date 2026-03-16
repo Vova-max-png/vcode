@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 eframe = "0.33.3"
 rfd = "0.15"
+ropey = "1.6.1"
 
 [dependencies.uuid]
 version = "1.22.0"
