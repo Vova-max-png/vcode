@@ -8,7 +8,8 @@ struct EditorInstance {
   id: String,
   content: Rope,
   path: String,
-  saved: bool
+  saved: bool,
+  last_lines_offset: usize
 }
 
 pub struct Editor {
@@ -96,7 +97,7 @@ impl Editor {
       Some(i) => i,
       None => return Err(io::Error::new(io::ErrorKind::NotFound, "No instance selected yet!"))
     };
-    current_instance.content = current_content;
+    current_instance.content = current_content.clone();
     match auto_save {
       true => { current_instance.save()?; },
       false => { current_instance.set_unsaved(); },
@@ -123,6 +124,14 @@ impl Editor {
       None => Ok(None)
     }
   }
+  
+  pub fn last_lines_offset(&mut self) -> usize {
+    self.current_instance().unwrap().unwrap_or(&mut EditorInstance::new(String::new())).last_lines_offset
+  }
+
+  pub fn set_last_lines_offset(&mut self, lines: usize) {
+    self.current_instance().unwrap().unwrap().last_lines_offset = lines;
+  }
 }
 
 impl EditorInstance {
@@ -132,7 +141,8 @@ impl EditorInstance {
       id: instance_id,
       content: Rope::new(),
       path,
-      saved: true
+      saved: true,
+      last_lines_offset: 0
     }
   }
 
@@ -142,7 +152,6 @@ impl EditorInstance {
   }
 
   pub fn save(&mut self) -> Result<&mut Self, io::Error> {
-    println!("Writing: {}", self.content.to_string());
     self.content.write_to(BufWriter::new(File::create(self.path.clone())?))?;
     self.saved = true;
     Ok(self)
