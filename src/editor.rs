@@ -1,22 +1,13 @@
-use std::{collections::btree_map::Range, fs::File, io::{self, BufWriter}, ops::{Bound, RangeBounds}, path::PathBuf};
-use ropey::{Rope, RopeSlice};
+use std::{fs::File, io::{self, BufWriter}, ops::{Bound, Range, RangeBounds}, path::PathBuf};
+use ropey::Rope;
 
 use uuid::Uuid;
-
-#[derive(Clone)]
-struct EditorInstance {
-  id: String,
-  content: Rope,
-  path: String,
-  saved: bool,
-  last_lines_offset: usize
-}
 
 pub struct Editor {
   pub auto_save: bool,
   editor_instances: Vec<EditorInstance>,
   active_instance_id: Option<String>,
-  pub current_content: Rope
+  pub current_content: Rope,
 }
 
 impl Editor {
@@ -25,7 +16,7 @@ impl Editor {
       auto_save: false,
       editor_instances: Vec::new(),
       active_instance_id: None,
-      current_content: Rope::new()
+      current_content: Rope::new(),
     }
   }
 
@@ -132,6 +123,45 @@ impl Editor {
   pub fn set_last_lines_offset(&mut self, lines: usize) {
     self.current_instance().unwrap().unwrap().last_lines_offset = lines;
   }
+
+  pub fn set_selected_range(&mut self, range: Option<Range<usize>>) -> Result<(), io::Error> {
+    let current_instance = match self.current_instance()? {
+      Some(i) => i,
+      None => return Err(io::Error::new(io::ErrorKind::NotFound, "There is no active instance to set selected range!"))
+    };
+    current_instance.selected_range = range;
+    Ok(())
+  }
+
+  pub fn get_selected_range(&mut self) -> Result<Option<Range<usize>>, io::Error> {
+    let current_instance = match self.current_instance()? {
+      Some(i) => i,
+      None => return Err(io::Error::new(io::ErrorKind::NotFound, "There is no active instance to get selected range!"))
+    };
+    Ok(current_instance.selected_range.clone())
+  }
+
+  pub fn set_cut_selection(&mut self, cut: bool) -> Result<(), io::Error> {
+    let current_instance = self.current_instance()?.unwrap();
+    current_instance.cut_selection = cut;
+    Ok(())
+  }
+
+  pub fn get_cut_selection(&mut self) -> Result<bool, io::Error> {
+    let current_instance = self.current_instance()?.unwrap();
+    Ok(current_instance.cut_selection)
+  }
+}
+
+#[derive(Clone)]
+struct EditorInstance {
+  id: String,
+  content: Rope,
+  path: String,
+  saved: bool,
+  last_lines_offset: usize,
+  pub selected_range: Option<Range<usize>>,
+  pub cut_selection: bool
 }
 
 impl EditorInstance {
@@ -142,7 +172,9 @@ impl EditorInstance {
       content: Rope::new(),
       path,
       saved: true,
-      last_lines_offset: 0
+      last_lines_offset: 0,
+      selected_range: None,
+      cut_selection: false
     }
   }
 
