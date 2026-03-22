@@ -33,4 +33,4 @@ fn main() -> Result<(), eframe::Error> {
 enum ColorChoice { Red, Green, Blue }
 
 #[derive(PartialEq, Debug, Clone, Copy)]
-enum AppMode { View, Edit, Settings }
+enum AppMode { Welcome, Editing, Settings }

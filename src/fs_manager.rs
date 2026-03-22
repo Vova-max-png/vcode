@@ -26,8 +26,17 @@ impl Manager {
   }
 
   pub fn set_path(&mut self, path: String) -> &mut Self {
-    self.current = Some(path.clone().into());
-    self.current_opened = Some(path.into());
+    let path_buf = PathBuf::from(path.clone());
+    self.current = Some(path_buf.clone());
+    self.current_opened = Some(path_buf.clone());
+    println!("Creating new file if does not exist for path: {}", self.current_opened.as_ref().unwrap().to_str().unwrap().to_string());
+    match std::fs::File::open(self.current_opened.as_ref().unwrap()) {
+      Ok(_) => {},
+      Err(_) => {
+        println!("Creating new file: {}", self.current_opened.as_ref().unwrap().to_str().unwrap().to_string());
+        std::fs::File::create(self.current_opened.as_ref().unwrap()).expect("Couldn't create new file");
+      }
+    }
     self
   }
 

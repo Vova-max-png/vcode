@@ -24,11 +24,12 @@ impl Editor {
   // Firstly, check whether there is already an instance with such path
   // to prevent creating many instances for one file
   pub fn new_instance(&mut self, path: String) -> Result<(), io::Error> {
+    println!("New instance with path: {}", path);
     match self.instance_by_path(path.clone()) {
       Some(i) => { self.set_active_instance(i.id).unwrap(); },
       None => {
-        let mut instance = EditorInstance::new(path.clone());
-        instance.parse(path.clone())?;
+        let mut instance = EditorInstance::new(Some(path.clone()));
+        instance.parse()?;
         self.active_instance_id = Some(instance.id());
         self.editor_instances.push(instance);
         self.current_content = self.current_instance()?.unwrap().clone().content;
@@ -50,12 +51,12 @@ impl Editor {
     let instances = self.editor_instances.clone();
     let mut data = Vec::new();
     for i in instances {
-      let path = PathBuf::from(i.path.clone());
+      let path = PathBuf::from(i.path.clone().unwrap_or(String::from("Untitled")));
       let name = path.file_name()
         .and_then(|os_str| os_str.to_str())
         .map(|s| s.to_string()).unwrap_or("Unknown file".to_string());
       let saved = i.saved;
-      data.push((name, i.path, saved));
+      data.push((name, path.to_str().unwrap().to_string(), saved));
     }
     Ok(data)
   }
@@ -64,14 +65,14 @@ impl Editor {
   // Used to check whether there is already instance with such path
   // to prevent creating many instances for one file
   fn instance_by_path(&self, path: String) -> Option<EditorInstance> {
-    match self.editor_instances.iter().find(|i| i.path == path) {
+    match self.editor_instances.iter().find(|i| PathBuf::from(i.path.clone().unwrap_or(String::from("Untitled"))) == PathBuf::from(path.clone())) {
       Some(i) => return Some(i.clone()),
       None => return None
     }
   }
 
   // Function used to update current instance's content
-  pub fn update_instance_content<R>(&mut self, range: R, buf: String) -> Result<(), io::Error>
+  pub fn update_instance_content<R>(&mut self, range: R, buf: String)
   where 
     R: RangeBounds<usize> + Clone
     {
@@ -84,16 +85,15 @@ impl Editor {
     };
     self.current_content.insert(range_start, &buf);
     let current_content = self.current_content.clone();
-    let current_instance = match self.current_instance()?{
+    let current_instance = match self.current_instance().unwrap() {
       Some(i) => i,
-      None => return Err(io::Error::new(io::ErrorKind::NotFound, "No instance selected yet!"))
+      None => &mut EditorInstance::new(None)
     };
     current_instance.content = current_content.clone();
     match auto_save {
-      true => { current_instance.save()?; },
+      true => { current_instance.save(); },
       false => { current_instance.set_unsaved(); },
     }
-    Ok(())
   }
 
   // Function that calls current instance's save function
@@ -101,7 +101,7 @@ impl Editor {
   pub fn save_current_instance(&mut self) ->Result<(), io::Error> {
     let current_instance = match self.current_instance()? {
       Some(i) => i,
-      None => return Err(io::Error::new(io::ErrorKind::NotFound, "There is no active instance to be saved!"))
+      None => &mut EditorInstance::new(None)
     };
     current_instance.save()?;
     Ok(())
@@ -117,7 +117,7 @@ impl Editor {
   }
   
   pub fn last_lines_offset(&mut self) -> usize {
-    self.current_instance().unwrap().unwrap_or(&mut EditorInstance::new(String::new())).last_lines_offset
+    self.current_instance().unwrap().unwrap_or(&mut EditorInstance::new(None)).last_lines_offset
   }
 
   pub fn set_last_lines_offset(&mut self, lines: usize) {
@@ -142,14 +142,20 @@ impl Editor {
   }
 
   pub fn set_cut_selection(&mut self, cut: bool) -> Result<(), io::Error> {
-    let current_instance = self.current_instance()?.unwrap();
+    let current_instance = match self.current_instance()? {
+      Some(i) => i,
+      None => return Err(io::Error::new(io::ErrorKind::NotFound, "There is no active instance to set selection cut!"))
+    };
     current_instance.cut_selection = cut;
     Ok(())
   }
 
-  pub fn get_cut_selection(&mut self) -> Result<bool, io::Error> {
-    let current_instance = self.current_instance()?.unwrap();
-    Ok(current_instance.cut_selection)
+  pub fn get_cut_selection(&mut self) -> Result<Option<bool>, io::Error> {
+    let current_instance = match self.current_instance()? {
+      Some(i) => i,
+      None => return Err(io::Error::new(io::ErrorKind::NotFound, "There is no active instance to set selection cut!"))
+    };
+    Ok(Some(current_instance.cut_selection))
   }
 }
 
@@ -157,7 +163,7 @@ impl Editor {
 struct EditorInstance {
   id: String,
   content: Rope,
-  path: String,
+  path: Option<String>,
   saved: bool,
   last_lines_offset: usize,
   pub selected_range: Option<Range<usize>>,
@@ -165,8 +171,8 @@ struct EditorInstance {
 }
 
 impl EditorInstance {
-  pub fn new(path: String) -> Self {
-    let instance_id = format!("{}-{}", path, Uuid::new_v4());
+  pub fn new(path: Option<String>) -> Self {
+    let instance_id = format!("{}-{}", path.clone().unwrap_or(String::from("Untitled")), Uuid::new_v4());
     Self {
       id: instance_id,
       content: Rope::new(),
@@ -178,13 +184,21 @@ impl EditorInstance {
     }
   }
 
-  pub fn parse(&mut self, path: String) -> Result<&Self, io::Error> {
+  pub fn parse(&mut self) -> Result<&Self, io::Error> {
+    let path = match self.path.clone() {
+      Some(p) => p,
+      None => return Err(io::Error::new(io::ErrorKind::NotSeekable, "Assign path first to parse the content!"))
+    };
     self.content = Rope::from_reader(std::fs::File::open(path)?)?;
     Ok(self)
   }
 
   pub fn save(&mut self) -> Result<&mut Self, io::Error> {
-    self.content.write_to(BufWriter::new(File::create(self.path.clone())?))?;
+    let path = match self.path.clone() {
+      Some(p) => p,
+      None => return Err(io::Error::new(io::ErrorKind::NotSeekable, "Assign path first to save the content!"))
+    };
+    self.content.write_to(BufWriter::new(File::create(path)?))?;
     self.saved = true;
     Ok(self)
   }

@@ -25,8 +25,7 @@ pub struct MyApp {
     manager: Manager,
     layouter: Layouter,
     current_mode: AppMode,
-    editor: Editor,
-    opening_file: bool
+    editor: Editor
 }
 
 impl Default for MyApp {
@@ -43,9 +42,8 @@ impl Default for MyApp {
             counter: 0,
             manager,
             editor,
-            current_mode: AppMode::View,
-            layouter,
-            opening_file: false
+            current_mode: AppMode::Welcome,
+            layouter
         }
     }
 }
@@ -66,9 +64,65 @@ impl MyApp {
 
                 if response.clicked() {
                     self.editor.new_instance(format!("{}/{}", file.path().to_string(), file.name().unwrap())).unwrap();
+                    self.current_mode = AppMode::Editing;
                 }
             }
         } 
+    }
+
+    fn calculate_cursor_pos(&mut self, ui: &mut egui::Ui, input_id: egui::Id, start: usize, visible_rows: usize) {
+        let last_lines_offset = self.editor.last_lines_offset();
+        if last_lines_offset != start {
+            let mut state = TextEditState::load(ui.ctx(), input_id).unwrap_or_default();
+
+            // Getting global offset in lines after scrolling
+            let global_offset_lines = start;
+
+            // Saving primary and secondary cursor positions before scrolling to calculate the new ones after scrolling
+            let (last_cursor_pos, selected_until) = match self.editor.get_cut_selection().unwrap_or(Some(false)) {
+                Some(true) => {
+                    let range = self.editor.get_selected_range().unwrap().unwrap();
+                    (range.start as i64, range.end as i64)
+                },
+                Some(false) => {
+                    let range = state.cursor.char_range().unwrap_or_default();
+                    (range.secondary.index as i64, range.primary.index as i64)
+                },
+                None => (0, 0)
+            };
+
+            // Calculating current global offset in chars
+            let end_ixd = self.editor.current_content.line_to_char(global_offset_lines);
+            let global_offset_chars = self.editor.current_content.slice(0..end_ixd).len_chars()  as i64;
+
+            // Calculating last global offset in chars to calculate the actual difference in chars to move the cursor accordingly to the scroll
+            let last_end_idx = self.editor.current_content.line_to_char(last_lines_offset);
+            let last_offset_chars = self.editor.current_content.slice(0..last_end_idx).len_chars()  as i64;
+
+            // Calculating the primary and secondary cursor new position after scrolling based on the actual difference in chars from the last offset to the new global offset
+            let start_idx = last_cursor_pos - (global_offset_chars - last_offset_chars);
+            let end_idx = start_idx + (selected_until - last_cursor_pos);
+
+            let global_end_index = self.editor.current_content.line_to_char(global_offset_lines + visible_rows);
+
+            if max(end_idx, start_idx) > (global_end_index as i64 - global_offset_chars) - 5 || min(end_idx, start_idx) < 0 {
+                self.editor.set_cut_selection(true).unwrap();
+            } else {
+                self.editor.set_cut_selection(false).unwrap();
+            }
+
+            // Save char positions of the primary and secondary cursors as a range to be able to restore the selection after scrolling
+            self.editor.set_selected_range(Some(start_idx as usize..end_idx as usize)).unwrap();
+
+            // Creating new CCursorRange instance with new primary and secondary cursor positions
+            let new_cursor_pos = CCursorRange::two(CCursor::new((start_idx).clamp(0, global_end_index as i64) as usize), CCursor::new((end_idx).clamp(0, global_end_index as i64) as usize));
+            state.cursor = new_cursor_pos.into();
+                                                    
+            // Saving current lines offset to use it in the next iteration to calculate the new offset after the next scroll
+            self.editor.set_last_lines_offset(global_offset_lines);
+
+            state.store(ui.ctx(), input_id);
+        }
     }
 
     fn set_current_path(&mut self, path: String) -> Result<(), io::Error> {
@@ -90,12 +144,20 @@ impl eframe::App for MyApp {
                             egui::menu::bar(ui, |ui| {
                                 ui.set_height(ui.available_height());
                                 ui.menu_button("File", |ui| {
+                                    if ui.button("New File").clicked() {
+                                        if let Some(path) = rfd::FileDialog::new().save_file() {
+                                            println!("Choosing path to create new file: {}", path.to_str().unwrap().to_string());
+                                            self.set_current_path(path.to_str().unwrap().to_string()).unwrap();
+                                            self.editor.new_instance(path.to_str().unwrap().to_string()).unwrap();
+                                            self.current_mode = AppMode::Editing;
+                                        }
+                                        ctx.request_repaint();
+                                    }
                                     if ui.button("Open File").clicked() { 
                                         if let Some(path) = rfd::FileDialog::new().pick_file() {
                                             println!("{:#?}", path);
                                             self.set_current_path(path.to_str().unwrap().to_string()).unwrap();
                                         }
-                                        self.opening_file = false;
                                         ctx.request_repaint();
                                     }
                                     if ui.button("Open Folder").clicked() { 
@@ -103,14 +165,13 @@ impl eframe::App for MyApp {
                                             println!("{}", path.to_str().unwrap().to_string());
                                             self.set_current_path(path.to_str().unwrap().to_string()).unwrap();
                                         }
-                                        self.opening_file = false;
                                     }
                                     if ui.button("Save").clicked() { 
                                         match self.editor.save_current_instance() {
                                             Ok(_) => {},
                                             Err(e) => {
                                                 println!("Current instance: {:#?}", e);
-                                                if let Some(path) = rfd::FileDialog::new().pick_file() {
+                                                if let Some(path) = rfd::FileDialog::new().save_file() {
                                                     println!("Choosing path to create new file: {}", path.to_str().unwrap().to_string());
                                                     self.set_current_path(path.to_str().unwrap().to_string()).unwrap();
                                                     self.editor.new_instance(path.to_str().unwrap().to_string()).unwrap();
@@ -124,8 +185,8 @@ impl eframe::App for MyApp {
                                 });
 
                                 ui.menu_button("Edit", |ui| {
-                                    if ui.radio_value(&mut self.current_mode, AppMode::View, "View").clicked() { ui.close(); }
-                                    if ui.radio_value(&mut self.current_mode, AppMode::Edit, "Edit").clicked() { ui.close(); }
+                                    if ui.radio_value(&mut self.current_mode, AppMode::Welcome, "Welcome").clicked() { ui.close(); }
+                                    if ui.radio_value(&mut self.current_mode, AppMode::Editing, "Editing").clicked() { ui.close(); }
                                     if ui.radio_value(&mut self.current_mode, AppMode::Settings, "Settings").clicked() { ui.close(); }
                                 })
                             });
@@ -208,7 +269,7 @@ impl eframe::App for MyApp {
                     ui.visuals().widgets.noninteractive.bg_stroke
                 );
                 match self.current_mode {
-                    AppMode::View => {
+                    AppMode::Editing => {
                         egui::Frame::new()
                             .fill(egui::Color32::from_rgb(6, 11, 31))
                             .inner_margin(10.)
@@ -254,59 +315,7 @@ impl eframe::App for MyApp {
                                                 };
 
                                                 let input_id = Id::new("editor input");
-
-                                                // Get last lines offset to check whether the area has been scrolled
-                                                let last_lines_offset = self.editor.last_lines_offset();
-                                                if last_lines_offset != rows_range.start {
-                                                    let mut state = TextEditState::load(ui.ctx(), input_id).unwrap_or_default();
-
-                                                    // Getting global offset in lines after scrolling
-                                                    let global_offset_lines = rows_range.start;
-
-                                                    // Saving primary and secondary cursor positions before scrolling to calculate the new ones after scrolling
-                                                    let (last_cursor_pos, selected_until) = match self.editor.get_cut_selection().unwrap_or(false) {
-                                                        true => {
-                                                            let range = self.editor.get_selected_range().unwrap().unwrap();
-                                                            (range.start as i64, range.end as i64)
-                                                        },
-                                                        false => {
-                                                            let range = state.cursor.char_range().unwrap_or_default();
-                                                            (range.secondary.index as i64, range.primary.index as i64)
-                                                        }
-                                                    };
-                                                    
-                                                    // Calculating current global offset in chars
-                                                    let end_ixd = self.editor.current_content.line_to_char(global_offset_lines);
-                                                    let global_offset_chars = self.editor.current_content.slice(0..end_ixd).len_chars()  as i64;
-
-                                                    // Calculating last global offset in chars to calculate the actual difference in chars to move the cursor accordingly to the scroll
-                                                    let last_end_idx = self.editor.current_content.line_to_char(last_lines_offset);
-                                                    let last_offset_chars = self.editor.current_content.slice(0..last_end_idx).len_chars()  as i64;
-
-                                                    // Calculating the primary and secondary cursor new position after scrolling based on the actual difference in chars from the last offset to the new global offset
-                                                    let start_idx = last_cursor_pos - (global_offset_chars - last_offset_chars);
-                                                    let end_idx = start_idx + (selected_until - last_cursor_pos);
-
-                                                    let global_end_index = self.editor.current_content.line_to_char(global_offset_lines + visible_rows);
-
-                                                    if max(end_idx, start_idx) > (global_end_index as i64 - global_offset_chars) - 5 || min(end_idx, start_idx) < 0 {
-                                                        self.editor.set_cut_selection(true).unwrap();
-                                                    } else {
-                                                        self.editor.set_cut_selection(false).unwrap();
-                                                    }
-
-                                                    // Save char positions of the primary and secondary cursors as a range to be able to restore the selection after scrolling
-                                                    self.editor.set_selected_range(Some(start_idx as usize..end_idx as usize)).unwrap();
-
-                                                    // Creating new CCursorRange instance with new primary and secondary cursor positions
-                                                    let new_cursor_pos = CCursorRange::two(CCursor::new((start_idx).clamp(0, global_end_index as i64) as usize), CCursor::new((end_idx).clamp(0, global_end_index as i64) as usize));
-                                                    state.cursor = new_cursor_pos.into();
-                                                    
-                                                    // Saving current lines offset to use it in the next iteration to calculate the new offset after the next scroll
-                                                    self.editor.set_last_lines_offset(global_offset_lines);
-
-                                                    state.store(ui.ctx(), input_id);
-                                                }
+                                                self.calculate_cursor_pos(ui, input_id, rows_range.start, visible_rows);
 
                                                 let response = ui.add_sized(ui.available_size(), egui::TextEdit::multiline(&mut buf)
                                                     .font(text_style)
@@ -323,14 +332,14 @@ impl eframe::App for MyApp {
                                                 );
 
                                                 if response.changed() {
-                                                    self.editor.update_instance_content(start_idx..end_idx, buf).unwrap();
+                                                    self.editor.update_instance_content(start_idx..end_idx, buf);
                                                 }
 
                                                 if response.hovered() {
                                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
                                                 }
 
-                                                if response.drag_started() || response.clicked() {
+                                                if (response.drag_started() || response.clicked()) && self.editor.get_cut_selection().unwrap_or(Some(false)).unwrap_or(false) {
                                                     self.editor.set_cut_selection(false).unwrap();
                                                 }
                                             });
@@ -338,28 +347,17 @@ impl eframe::App for MyApp {
                                 });
                             });
                     },
-                    AppMode::Edit => {
-                        ui.heading("Editing data");
-                        egui::Grid::new("edit_grid")
-                            .num_columns(2)
-                            .spacing([20., 8.])
-                            .striped(true)
+                    AppMode::Welcome => {
+                        egui::Frame::new()
+                            .fill(egui::Color32::from_rgb(6, 11, 31))
+                            .inner_margin(10.)
                             .show(ui, |ui| {
-                                ui.label("Edit Label: ");
-                                ui.text_edit_singleline(&mut self.label);
-                                ui.end_row();
-
-                                ui.label("Adjust Value: ");
-                                ui.add(egui::Slider::new(&mut self.value, 0.0..=10.));
-                                ui.end_row();
-
-                                ui.label("Counter: ");
-                                ui.horizontal(|ui| {
-                                    if ui.button("+").clicked() { self.counter += 1 }
-                                    ui.label(format!("{}", self.counter)).highlight();
-                                    if ui.button("-").clicked() { self.counter -= 1 }
+                                ui.allocate_ui(ui.available_size(), |ui| {
+                                    ui.heading("Welcome to VCode!");
+                                    ui.label("Your new favorite code editor");
                                 });
-                                ui.end_row();
+
+                                ui.allocate_space(ui.available_size());
                             });
                     },
                     AppMode::Settings => {
